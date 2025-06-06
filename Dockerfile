@@ -13,6 +13,12 @@ COPY api api/
 COPY config config/
 COPY controllers controllers/
 
+# Remove the podvm-builder subfolder from the copied files
+# It contains a submodule that conflicts with the build: when we try to
+# use "go run [controller-gen]", the dependencies are looked up through all
+# the subfolders, and the submodule's dependency prevents the run.
+RUN rm -rf config/peerpods/podvm
+
 # Copy our controller-gen script to work around hermetic build issues
 # See comments in the script itself for more details.
 COPY controller-gen bin/
