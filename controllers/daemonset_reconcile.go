@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -142,6 +143,7 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigDeleteRequestDaemonSet(
 		for _, node := range nodes {
 			r.Log.Info("node must be rebooted", "node", node.Name)
 		}
+		//r.scheduleInstallation(UninstallKata)
 		return ctrl.Result{}, nil
 	}
 
@@ -313,10 +315,7 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequestDaemonSet
 		// NodeEventHandler should trigger reconciliation on label changes
 		// so no need for that.
 		r.Log.Info("Waiting for kata installation DaemonSet to finish", "daemonSet", kataInstallDaemonSet.Name)
-		nodes, _ := r.isNodeRebootRequired()
-		for _, node := range nodes {
-			r.Log.Info("node must be rebooted", "node", node.Name)
-		}
+		r.scheduleInstallation(InstallKata)
 	}
 
 	return ctrl.Result{}, nil
@@ -714,9 +713,6 @@ func (r *KataConfigOpenShiftReconciler) putNodeOnStatusListDaemonSetInstall(node
 		r.kataConfig.Status.KataNodes.WaitingToInstall = append(r.kataConfig.Status.KataNodes.WaitingToInstall, node.GetName())
 	case string(KataInstalling):
 		r.kataConfig.Status.KataNodes.Installing = append(r.kataConfig.Status.KataNodes.Installing, node.GetName())
-		// rpm-ostree changes applied after reboot
-	case string(KataWaitingForReboot):
-		r.kataConfig.Status.KataNodes.Installing = append(r.kataConfig.Status.KataNodes.Installing, node.GetName())
 	case string(KataInstalled):
 		r.kataConfig.Status.KataNodes.Installed = append(r.kataConfig.Status.KataNodes.Installed, node.GetName())
 	default:
@@ -767,5 +763,53 @@ func (r *KataConfigOpenShiftReconciler) unlabelNodesDaemonSet(nodeSelector label
 			}
 		}
 	}
+	return nil
+}
+
+func (r *KataConfigOpenShiftReconciler) scheduleInstallation(action KataDaemonSetAction) error {
+	var nodeNames []string
+	var labelValue string
+	
+	switch action {
+	case InstallKata:
+		// Make sure only trigger the next installation if there is no ongoing one
+		if len(r.kataConfig.Status.KataNodes.Installing) > 0 {
+			return nil
+		}
+		nodeNames = r.kataConfig.Status.KataNodes.WaitingToInstall
+		labelValue = string(KataInstalling)
+	case UninstallKata:
+		// Make sure only trigger the next uninstallation if there is no ongoing one
+		if len(r.kataConfig.Status.KataNodes.Uninstalling) > 0 {
+			return nil
+		}
+		nodeNames = r.kataConfig.Status.KataNodes.WaitingToUninstall
+		labelValue = string(KataUninstalling)
+	}
+
+	if len(nodeNames) == 0 {
+		return nil
+	}
+
+	nodeName := nodeNames[0]
+
+	r.Log.Info(fmt.Sprintf("Schedule next node to start kata %s", action), "nodeName", nodeName)
+
+	var node corev1.Node
+
+	err := r.Client.Get(context.TODO(), types.NamespacedName{Name: nodeName}, &node)
+	if err != nil {
+		r.Log.Info("Getting node failed")
+		return err
+	}
+
+	node.Labels[kataInstallationDaemonSetLabel] = labelValue
+
+	err = r.Client.Update(context.TODO(), &node) 
+	if err != nil {
+		r.Log.Info("Updating node labels failed")
+		return err
+	}
+
 	return nil
 }
