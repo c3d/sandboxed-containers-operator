@@ -25,6 +25,58 @@ case "$ARCH" in
         ;;
 esac
 
+# Format: "absolute_source_path:absolute_dest_path:octal_mode"
+FILES=(
+	"/files/50-kata-remote:/host/etc/crio/crio.conf.d/50-kata-remote:0644"
+	"/files/configuration-remote.toml:/host/opt/kata/configuration-remote.toml:0420"
+)
+
+copy_file() {
+	local src="$1" dest="$2" perm="$3"
+	if [[ -f "$src" ]]; then
+		if [[ -e "$dest" ]]; then
+			echo "$dest already exists, skipping"
+		else
+			# GNU coreutils install: create parents (-D) and set mode (-m)
+			install -D -m "$perm" "$src" "$dest"
+			echo "Installed $(basename "$src") -> $dest (mode $perm)"
+		fi
+	else
+		echo "Warning: $(basename "$src") not found"
+	fi
+}
+
+remove_file() {
+	local dest="$1"
+	if [[ -e "$dest" ]]; then
+		rm -f "$dest"
+		echo "Removed $dest"
+	else
+		echo "Info: $dest not present; skipping"
+	fi
+}
+
+copy_kata_remote_config_files() {
+	echo "Starting configuration copy..."
+
+	for entry in "${FILES[@]}"; do
+		IFS=: read -r src dest perm <<<"$entry"
+		copy_file "$src" "$dest" "$perm"
+	done
+
+	echo "Configuration copy completed"
+}
+
+remove_kata_remote_config_files() {
+	echo "Starting configuration removal..."
+
+	for entry in "${FILES[@]}"; do
+		IFS=: read -r _src dest _perm <<<"$entry"
+		remove_file "$dest"
+	done
+
+	echo "Configuration removal completed"
+}
 
 # label the node with the passed state
 label_node() {
@@ -288,6 +340,9 @@ uninstall_kata() {
 
 	# Uninstall extensions from the node
 	chroot /host /bin/bash -c "rpm-ostree uninstall $PACKAGES"
+
+	# Remove Config
+	remove_kata_remote_config_files
 
 	# Wait again: rpm-ostree uninstall stages changes, requiring a reboot
 	wait_for_reboot_clear
